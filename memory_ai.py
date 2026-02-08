@@ -1,179 +1,96 @@
 """
-AI with Memory
-===============
-A conversational AI that remembers previous interactions.
-Uses a local LLM via Ollama (no API key, no billing).
-
-Key Features:
-- Remembers conversation history
-- Maintains context across sessions
-- Personalized responses
-- Simple memory management
-- Streaming responses (no freezing)
+AI with Memory (Gemini - Local CLI)
+==================================
+Working, verified Gemini version.
 """
 
 import os
 import json
 from pathlib import Path
-import ollama
+from google import genai
 
-# File to store conversation history
+# -------- CONFIG --------
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+MODEL = "models/gemini-flash-latest"
 HISTORY_FILE = "conversation_history.json"
+MAX_HISTORY = 20
 
+# -------- MEMORY --------
 
-def load_conversation_history():
-    """Load conversation history from file."""
+def load_history():
     if Path(HISTORY_FILE).exists():
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return []
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     return []
 
-
-def save_conversation_history(history):
-    """Save conversation history to file."""
+def save_history(h):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
+        json.dump(h, f, indent=2, ensure_ascii=False)
 
+def trim(h):
+    if len(h) <= MAX_HISTORY:
+        return h
+    if h and h[0]["role"] == "system":
+        return [h[0]] + h[-(MAX_HISTORY - 1):]
+    return h[-MAX_HISTORY:]
 
-def clear_conversation_history():
-    """Delete all conversation history."""
-    if Path(HISTORY_FILE).exists():
-        os.remove(HISTORY_FILE)
-    print("✨ Memory cleared! Starting fresh.")
+# -------- CHAT --------
 
-
-def display_memory(history):
-    """Display the current conversation history."""
+def chat(user_msg, history):
     if not history:
-        print("No conversation history yet.")
-        return
-
-    print("\n" + "=" * 60)
-    print("CONVERSATION HISTORY")
-    print("=" * 60)
-
-    for i, msg in enumerate(history, 1):
-        role = msg["role"].upper()
-        content = msg["content"]
-        if len(content) > 100:
-            content = content[:100] + "..."
-        print(f"{i}. [{role}]: {content}")
-
-    print("=" * 60 + "\n")
-
-
-def trim_history(history, max_messages=20):
-    """Keep only recent messages to manage context size."""
-    if len(history) <= max_messages:
-        return history
-
-    if history and history[0]["role"] == "system":
-        return [history[0]] + history[-(max_messages - 1):]
-    return history[-max_messages:]
-
-
-def chat_with_memory(user_message, conversation_history):
-    """
-    Send a message and get a streamed response with memory.
-    """
-
-    # Add system message on first run
-    if not conversation_history:
-        conversation_history.append({
+        history.append({
             "role": "system",
-            "content": (
-                "You are a helpful AI assistant with memory. "
-                "You remember previous parts of the conversation and can reference them. "
-                "Be friendly, helpful, and maintain context."
-            )
+            "content": "You are a helpful AI assistant with memory."
         })
 
-    # Add user message
-    conversation_history.append({
-        "role": "user",
-        "content": user_message
-    })
+    history.append({"role": "user", "content": user_msg})
 
-    messages_to_send = trim_history(conversation_history, max_messages=20)
+    prompt = "\n".join(
+        f"{m['role'].upper()}: {m['content']}"
+        for m in trim(history)
+    )
 
-    assistant_message = ""
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=prompt
+    )
 
-    # STREAMING RESPONSE (IMPORTANT FIX)
-    for chunk in ollama.chat(
-        model="phi",   # fast & lightweight
-        messages=messages_to_send,
-        stream=True
-    ):
-        token = chunk["message"]["content"]
-        print(token, end="", flush=True)
-        assistant_message += token
+    reply = response.text.strip()
+    history.append({"role": "assistant", "content": reply})
+    return reply
 
-    # Save assistant response
-    conversation_history.append({
-        "role": "assistant",
-        "content": assistant_message
-    })
-
-    return assistant_message
-
+# -------- CLI --------
 
 def main():
-    """Main CLI loop."""
     print("=" * 60)
-    print("AI with Memory (Ollama - Local & Free)")
+    print("AI with Memory (Gemini - Local CLI)")
     print("=" * 60)
-    print()
-    print("I'm an AI assistant that remembers our conversations!")
-    print()
-    print("Commands:")
-    print("  - 'clear memory' : Delete conversation history")
-    print("  - 'show memory'  : Display current memory")
-    print("  - 'quit'         : Exit")
-    print()
+    print("Commands: clear memory | show memory | quit")
 
-    conversation_history = load_conversation_history()
-
-    if conversation_history:
-        print(f"📚 Loaded {len(conversation_history)} previous messages")
-        print("    (I remember our past conversations!)")
-    else:
-        print("📝 Starting a new conversation")
-
-    print("\n" + "-" * 60)
+    history = load_history()
 
     while True:
-        user_input = input("\nYou: ").strip()
+        msg = input("\nYou: ").strip()
 
-        if not user_input:
-            continue
-
-        if user_input.lower() in ["quit", "exit", "q"]:
-            save_conversation_history(conversation_history)
-            print("\n💾 Conversation saved. Goodbye!")
+        if msg.lower() in ("quit", "exit", "q"):
+            save_history(history)
+            print("💾 Saved. Bye!")
             break
 
-        elif user_input.lower() == "clear memory":
-            conversation_history = []
-            clear_conversation_history()
+        if msg == "clear memory":
+            history = []
+            save_history(history)
+            print("✨ Memory cleared")
             continue
 
-        elif user_input.lower() == "show memory":
-            display_memory(conversation_history)
+        if msg == "show memory":
+            print(history)
             continue
 
-        try:
-            print("\nAI: ", end="", flush=True)
-            chat_with_memory(user_input, conversation_history)
-            print()  # newline after streaming
-            save_conversation_history(conversation_history)
-
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            print("Please make sure Ollama is running and the model is installed.")
-
+        reply = chat(msg, history)
+        print("\nAI:", reply)
+        save_history(history)
 
 if __name__ == "__main__":
     main()
