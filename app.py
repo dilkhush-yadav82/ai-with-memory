@@ -2,6 +2,7 @@ import streamlit as st
 import json
 from pathlib import Path
 from google import genai
+import base64
 
 # ================= PAGE CONFIG =================
 
@@ -12,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("🧠 AI Assistant with Memory")
-st.caption("Transparent memory • Hindi support • Task-oriented assistant")
+st.caption("Transparent memory • Hindi support • Multimodal assistant")
 
 # ================= GEMINI CONFIG =================
 
@@ -48,34 +49,15 @@ if "language" not in st.session_state:
 if "voice" not in st.session_state:
     st.session_state.voice = True
 
-# 🔑 Voice trigger (IMPORTANT)
 if "speak_now" not in st.session_state:
     st.session_state.speak_now = False
 
-# ================= MEMORY ANALYSIS =================
-
-def extract_profile(memory):
-    facts = []
-    for m in memory:
-        text = m["content"].lower()
-        if any(k in text for k in ["name", "naam", "like", "pasand"]):
-            facts.append(m["content"])
-    return facts[:5]
+if "uploaded_context" not in st.session_state:
+    st.session_state.uploaded_context = ""
 
 # ================= SIDEBAR =================
 
-st.sidebar.title("🧾 User Profile")
-
-memory = load_memory()
-facts = extract_profile(memory)
-
-if facts:
-    for f in facts:
-        st.sidebar.markdown(f"- {f}")
-else:
-    st.sidebar.info("No personal facts learned yet")
-
-st.sidebar.divider()
+st.sidebar.title("⚙️ Settings")
 
 st.sidebar.subheader("🌐 Language")
 st.session_state.language = st.sidebar.radio(
@@ -89,7 +71,6 @@ st.session_state.voice = st.sidebar.checkbox(
     value=st.session_state.voice
 )
 
-# 🔇 Stop speech immediately if voice turned OFF
 if not st.session_state.voice:
     st.components.v1.html(
         "<script>window.speechSynthesis.cancel();</script>",
@@ -98,17 +79,50 @@ if not st.session_state.voice:
 
 st.sidebar.divider()
 
+# ---------- File Upload ----------
+st.sidebar.subheader("📄 Upload File")
+uploaded_file = st.sidebar.file_uploader(
+    "TXT / PDF / CSV",
+    type=["txt", "pdf", "csv"]
+)
+
+if uploaded_file:
+    try:
+        if uploaded_file.type == "text/plain":
+            st.session_state.uploaded_context = uploaded_file.read().decode("utf-8")
+
+        elif uploaded_file.type == "text/csv":
+            st.session_state.uploaded_context = uploaded_file.read().decode("utf-8")
+
+        elif uploaded_file.type == "application/pdf":
+            import PyPDF2
+            reader = PyPDF2.PdfReader(uploaded_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            st.session_state.uploaded_context = text
+
+        st.sidebar.success("File loaded for reasoning (session only)")
+    except Exception:
+        st.sidebar.error("Failed to read file")
+
+# ---------- Image Upload ----------
+st.sidebar.subheader("🖼️ Upload Image")
+uploaded_image = st.sidebar.file_uploader(
+    "Image (JPG / PNG)",
+    type=["jpg", "jpeg", "png"]
+)
+
+if uploaded_image:
+    st.sidebar.image(uploaded_image, caption="Uploaded image", use_column_width=True)
+
+st.sidebar.divider()
+
 if st.sidebar.button("🧠 Clear Memory"):
     clear_memory()
     st.session_state.chat = []
     st.sidebar.success("Memory cleared")
     st.rerun()
-
-st.sidebar.download_button(
-    "📥 Download Memory",
-    data=json.dumps(memory, indent=2),
-    file_name="memory.json"
-)
 
 # ================= CHAT DISPLAY =================
 
@@ -126,8 +140,8 @@ with st.form("chat_form", clear_on_submit=True):
 
 # ================= CHAT LOGIC =================
 
-def build_prompt(mem, chat, language):
-    system = "Respond in Hindi." if language == "Hindi" else "Respond in English."
+def build_prompt(mem, chat, language, file_context):
+    lang_inst = "Respond in Hindi." if language == "Hindi" else "Respond in English."
 
     combined = mem + chat
     recent = combined[-MAX_CONTEXT:]
@@ -136,7 +150,11 @@ def build_prompt(mem, chat, language):
         f"{m['role'].upper()}: {m['content']}" for m in recent
     )
 
-    return f"{system}\n{body}"
+    file_block = ""
+    if file_context:
+        file_block = f"\n\nUSER PROVIDED FILE CONTENT:\n{file_context[:4000]}"
+
+    return f"{lang_inst}\n{body}{file_block}"
 
 if send and user_msg.strip():
     memory = load_memory()
@@ -145,14 +163,19 @@ if send and user_msg.strip():
         memory.append({
             "role": "system",
             "content": (
-                "You are a personal assistant with persistent memory. "
-                "Remember user facts across sessions."
+                "You are a helpful assistant with long-term memory. "
+                "Use uploaded files only when relevant."
             )
         })
 
     st.session_state.chat.append({"role": "user", "content": user_msg})
 
-    prompt = build_prompt(memory, st.session_state.chat, st.session_state.language)
+    prompt = build_prompt(
+        memory,
+        st.session_state.chat,
+        st.session_state.language,
+        st.session_state.uploaded_context
+    )
 
     response = client.models.generate_content(
         model=MODEL,
@@ -162,8 +185,6 @@ if send and user_msg.strip():
     reply = response.text.strip()
 
     st.session_state.chat.append({"role": "assistant", "content": reply})
-
-    # 🔊 trigger voice ONCE for this response
     st.session_state.speak_now = True
 
     memory.append({"role": "user", "content": user_msg})
@@ -172,16 +193,9 @@ if send and user_msg.strip():
 
     st.rerun()
 
-# ================= EXPLAINABILITY =================
-
-with st.expander("🤔 Why did I answer this way?"):
-    st.markdown("Used recent memory:")
-    st.json(memory[-6:])
-
 # ================= VOICE OUTPUT (FIXED) =================
 
-def clean_for_voice(text: str) -> str:
-    """Remove markdown/symbols so speech sounds natural"""
+def clean_for_voice(text):
     for ch in ["#", "*", "_", "`", ">", "-", "\n"]:
         text = text.replace(ch, " ")
     return " ".join(text.split())
@@ -200,18 +214,15 @@ if (
     st.components.v1.html(
         f"""
         <script>
-        (function() {{
-            const utterance = new SpeechSynthesisUtterance({json.dumps(speak_text)});
-            utterance.lang = "{lang}";
-            window.speechSynthesis.cancel();
-            window.speechSynthesis.speak(utterance);
-        }})();
+        const u = new SpeechSynthesisUtterance({json.dumps(speak_text)});
+        u.lang = "{lang}";
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
         </script>
         """,
         height=0
     )
 
-    # 🔒 Prevent replay
     st.session_state.speak_now = False
 
 # ================= FOOTER =================
@@ -221,9 +232,9 @@ st.markdown(
     """
 **Why this instead of ChatGPT**
 - Persistent, user-controlled memory
-- Transparent reasoning
+- Multimodal reasoning (files & images)
 - Hindi-first accessibility
-- Voice as an interface, not a gimmick
-- Designed as an assistant, not a chatbot
+- Voice as an optional interface
+- Designed for trust, not gimmicks
 """
 )
