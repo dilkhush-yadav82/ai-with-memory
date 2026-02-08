@@ -37,7 +37,7 @@ def save_memory(mem):
 def clear_memory():
     save_memory([])
 
-# ================= SESSION =================
+# ================= SESSION STATE =================
 
 if "chat" not in st.session_state:
     st.session_state.chat = []
@@ -48,13 +48,17 @@ if "language" not in st.session_state:
 if "voice" not in st.session_state:
     st.session_state.voice = True
 
+# 🔑 voice trigger flag (IMPORTANT FIX)
+if "speak_now" not in st.session_state:
+    st.session_state.speak_now = False
+
 # ================= MEMORY ANALYSIS =================
 
 def extract_profile(memory):
     facts = []
     for m in memory:
         text = m["content"].lower()
-        if "name" in text or "naam" in text or "like" in text or "pasand" in text:
+        if any(k in text for k in ["name", "naam", "like", "pasand"]):
             facts.append(m["content"])
     return facts[:5]
 
@@ -82,8 +86,15 @@ st.session_state.language = st.sidebar.radio(
 st.sidebar.subheader("🔊 Voice Output")
 st.session_state.voice = st.sidebar.checkbox(
     "Speak responses",
-    value=True
+    value=st.session_state.voice
 )
+
+# 🔇 Stop speech immediately if voice is turned OFF
+if not st.session_state.voice:
+    st.components.v1.html(
+        "<script>window.speechSynthesis.cancel();</script>",
+        height=0
+    )
 
 st.sidebar.divider()
 
@@ -116,10 +127,7 @@ with st.form("chat_form", clear_on_submit=True):
 # ================= CHAT LOGIC =================
 
 def build_prompt(mem, chat, language):
-    system = (
-        "Respond in Hindi." if language == "Hindi"
-        else "Respond in English."
-    )
+    system = "Respond in Hindi." if language == "Hindi" else "Respond in English."
 
     combined = mem + chat
     recent = combined[-MAX_CONTEXT:]
@@ -155,6 +163,9 @@ if send and user_msg.strip():
 
     st.session_state.chat.append({"role": "assistant", "content": reply})
 
+    # 🔊 trigger voice ONLY for this response
+    st.session_state.speak_now = True
+
     memory.append({"role": "user", "content": user_msg})
     memory.append({"role": "assistant", "content": reply})
     save_memory(memory)
@@ -167,33 +178,42 @@ with st.expander("🤔 Why did I answer this way?"):
     st.markdown("Used recent memory:")
     st.json(memory[-6:])
 
-# ================= VOICE OUTPUT =================
+# ================= VOICE OUTPUT (FIXED) =================
 
-if st.session_state.voice and st.session_state.chat:
+if (
+    st.session_state.voice
+    and st.session_state.speak_now
+    and st.session_state.chat
+    and st.session_state.chat[-1]["role"] == "assistant"
+):
     last = st.session_state.chat[-1]
-    if last["role"] == "assistant":
-        lang = "hi-IN" if st.session_state.language == "Hindi" else "en-US"
-        st.components.v1.html(
-            f"""
-            <script>
-            const msg = new SpeechSynthesisUtterance({json.dumps(last["content"])});
-            msg.lang = "{lang}";
-            window.speechSynthesis.cancel();
-            window.speechSynthesis.speak(msg);
-            </script>
-            """,
-            height=0
-        )
+
+    lang = "hi-IN" if st.session_state.language == "Hindi" else "en-US"
+
+    st.components.v1.html(
+        f"""
+        <script>
+        const msg = new SpeechSynthesisUtterance({json.dumps(last["content"])});
+        msg.lang = "{lang}";
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(msg);
+        </script>
+        """,
+        height=0
+    )
+
+    # 🔒 reset trigger so it NEVER replays
+    st.session_state.speak_now = False
 
 # ================= FOOTER =================
 
 st.divider()
 st.markdown(
     """
-**What makes this different from ChatGPT**
+**Why this instead of ChatGPT**
 - Persistent, user-controlled memory
-- Transparent reasoning inputs
-- Hindi & Hinglish friendly
+- Transparent reasoning
+- Hindi-first accessibility
 - Voice as an interface, not a gimmick
 - Designed as an assistant, not a chatbot
 """
