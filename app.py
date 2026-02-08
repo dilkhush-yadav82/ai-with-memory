@@ -4,7 +4,7 @@ from pathlib import Path
 import google.generativeai as genai
 import os
 
-# ---------------- CONFIG ----------------
+# ---------------- PAGE CONFIG ----------------
 
 st.set_page_config(
     page_title="AI with Memory",
@@ -12,13 +12,18 @@ st.set_page_config(
     layout="centered"
 )
 
+st.title("🧠 AI with Memory")
+st.caption("Remembers you across sessions, not chats")
+
+# ---------------- GEMINI CONFIG ----------------
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-1.0-pro"   # stable for Streamlit Cloud
 HISTORY_FILE = "conversation_history.json"
 MAX_HISTORY = 20
 
-# ---------------- MEMORY (LONG-TERM) ----------------
+# ---------------- LONG-TERM MEMORY ----------------
 
 def load_memory():
     if Path(HISTORY_FILE).exists():
@@ -39,9 +44,9 @@ def clear_memory():
 # ---------------- SESSION STATE ----------------
 
 if "chat" not in st.session_state:
-    st.session_state.chat = []   # UI messages only
+    st.session_state.chat = []   # UI-only messages
 
-# ---------------- CHAT LOGIC ----------------
+# ---------------- PROMPT BUILDER ----------------
 
 def build_prompt(memory, session_chat):
     combined = memory + session_chat
@@ -50,19 +55,22 @@ def build_prompt(memory, session_chat):
         prompt += f"{msg['role'].upper()}: {msg['content']}\n"
     return prompt
 
+# ---------------- CHAT FUNCTION ----------------
+
 def chat_with_memory(user_message):
     memory = load_memory()
 
+    # Add system message once
     if not memory:
         memory.append({
             "role": "system",
             "content": (
                 "You are a helpful AI assistant with memory. "
-                "You remember user details across sessions but do not repeat old chats unless needed."
+                "You remember user details across sessions but do not repeat old conversations unless needed."
             )
         })
 
-    # Session chat (UI only)
+    # Add to session chat
     st.session_state.chat.append({
         "role": "user",
         "content": user_message
@@ -70,27 +78,33 @@ def chat_with_memory(user_message):
 
     prompt = build_prompt(memory, st.session_state.chat)
 
-    model = genai.GenerativeModel(MODEL_NAME)
-    response = model.generate_content(prompt)
-    assistant_message = response.text.strip()
+    try:
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(prompt)
+        assistant_message = response.text.strip()
 
-    # Save to session chat
+    except Exception:
+        assistant_message = (
+            "⚠️ Sorry, I'm temporarily unable to respond. "
+            "Please try again in a moment."
+        )
+        st.error("Gemini API error. Please check logs.")
+
+    # Add assistant reply to session chat
     st.session_state.chat.append({
         "role": "assistant",
         "content": assistant_message
     })
 
-    # Save to long-term memory
-    memory.append({"role": "user", "content": user_message})
-    memory.append({"role": "assistant", "content": assistant_message})
-    save_memory(memory)
+    # Save to long-term memory only if successful
+    if "temporarily unable" not in assistant_message:
+        memory.append({"role": "user", "content": user_message})
+        memory.append({"role": "assistant", "content": assistant_message})
+        save_memory(memory)
 
 # ---------------- UI ----------------
 
-st.title("🧠 AI with Memory")
-st.caption("Remembers you across sessions, not chats")
-
-# Display SESSION chat only
+# Display only SESSION chat (not old memory)
 for msg in st.session_state.chat:
     if msg["role"] == "user":
         st.markdown(f"**You:** {msg['content']}")
@@ -112,6 +126,8 @@ with col2:
 with col3:
     clear_memory_clicked = st.button("Clear Memory")
 
+# ---------------- BUTTON ACTIONS ----------------
+
 if send_clicked and user_input.strip():
     with st.spinner("Thinking..."):
         chat_with_memory(user_input)
@@ -131,8 +147,8 @@ if clear_memory_clicked:
 st.divider()
 st.markdown(
     """
-**How it works**
-- Chat UI resets every session
+**How this works**
+- UI chat resets every session
 - Memory persists across sessions
 - Memory is used only for reasoning
 - Built with Streamlit + Gemini
