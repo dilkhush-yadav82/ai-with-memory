@@ -5,211 +5,156 @@ from google import genai
 from google.genai import types
 import pandas as pd
 
-# ================= PAGE CONFIG =================
+# ================= CONFIG =================
 
 st.set_page_config(
-    page_title="AI with Memory",
+    page_title="AI Assistant with Memory",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
 
-st.title("🧠 AI with Memory")
-st.caption("Remembers you across sessions, not chats")
-
-# ================= GEMINI CONFIG =================
-
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-
-MODEL_NAME = "models/gemini-flash-latest"
-
-# ================= STORAGE CONFIG =================
-
-HISTORY_FILE = "conversation_history.json"
-MAX_CONTEXT_MESSAGES = 20     # sent to model
-MAX_STORED_MESSAGES = 2000    # stored on disk
+MODEL = "models/gemini-flash-latest"
+MEMORY_FILE = "conversation_history.json"
+MAX_CONTEXT = 20
 
 # ================= MEMORY =================
 
 def load_memory():
-    if Path(HISTORY_FILE).exists():
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+    if Path(MEMORY_FILE).exists():
+        return json.load(open(MEMORY_FILE, "r", encoding="utf-8"))
     return []
 
-def save_memory(memory):
-    memory = memory[-MAX_STORED_MESSAGES:]
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2, ensure_ascii=False)
+def save_memory(mem):
+    json.dump(mem, open(MEMORY_FILE, "w", encoding="utf-8"), indent=2)
 
 def clear_memory():
     save_memory([])
 
-# ================= SESSION STATE =================
+# ================= SESSION =================
 
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
-# ================= PROMPT BUILDER =================
+# ================= MEMORY ANALYSIS =================
 
-def build_prompt(memory, session_chat):
-    combined = memory + session_chat
-    recent = combined[-MAX_CONTEXT_MESSAGES:]
+def extract_facts(memory):
+    facts = []
+    for m in memory:
+        if "name" in m["content"].lower():
+            facts.append(m["content"])
+        if "like" in m["content"].lower():
+            facts.append(m["content"])
+    return facts[:5]
+
+# ================= SIDEBAR =================
+
+st.sidebar.title("🧾 User Profile")
+
+memory = load_memory()
+facts = extract_facts(memory)
+
+if facts:
+    for f in facts:
+        st.sidebar.markdown(f"- {f}")
+else:
+    st.sidebar.info("No personal facts learned yet.")
+
+st.sidebar.divider()
+
+st.sidebar.subheader("🧠 Memory Controls")
+
+if st.sidebar.button("Clear Memory"):
+    clear_memory()
+    st.session_state.chat = []
+    st.sidebar.success("Memory cleared")
+    st.rerun()
+
+st.sidebar.download_button(
+    "Download Memory",
+    data=json.dumps(memory, indent=2),
+    file_name="memory.json"
+)
+
+# ================= MAIN UI =================
+
+st.title("🧠 AI Assistant with Memory")
+st.caption("Transparent memory • Multimodal • Session-aware")
+
+for msg in st.session_state.chat:
+    if msg["role"] == "user":
+        st.markdown(f"**You:** {msg['content']}")
+    else:
+        st.markdown(f"**AI:** {msg['content']}")
+
+st.divider()
+
+# ================= INPUT =================
+
+with st.form("chat_form", clear_on_submit=True):
+    user_msg = st.text_input("Ask the assistant")
+
+    col1, col2 = st.columns(2)
+    image = col1.file_uploader("📷 Image", type=["png", "jpg"])
+    file = col2.file_uploader("📄 File", type=["txt", "csv", "pdf"])
+
+    send = st.form_submit_button("Ask Assistant")
+
+# ================= CHAT LOGIC =================
+
+def build_prompt(mem, chat):
+    combined = mem + chat
+    recent = combined[-MAX_CONTEXT:]
     return "\n".join(
         f"{m['role'].upper()}: {m['content']}" for m in recent
     )
 
-# ================= FILE PROCESSING =================
+def extract_file(file):
+    if file.type == "text/plain":
+        return file.read().decode()
+    if file.type == "text/csv":
+        return pd.read_csv(file).head(20).to_string()
+    return "User uploaded a document."
 
-def extract_file_content(uploaded_file):
-    if uploaded_file.type == "text/plain":
-        return uploaded_file.read().decode("utf-8")
-
-    if uploaded_file.type == "text/csv":
-        df = pd.read_csv(uploaded_file)
-        return df.head(50).to_string()
-
-    if uploaded_file.type == "application/pdf":
-        return "PDF uploaded. Summarize or extract key points."
-
-    return "Unsupported file type."
-
-# ================= CHAT LOGIC =================
-
-def chat_with_memory(user_message, image=None, file_text=None):
+if send and user_msg.strip():
     memory = load_memory()
 
     if not memory:
         memory.append({
             "role": "system",
-            "content": (
-                "You are a helpful AI assistant with memory. "
-                "You remember user details across sessions but do not repeat old chats."
-            )
+            "content": "You are a helpful assistant with long-term memory."
         })
 
-    st.session_state.chat.append({
-        "role": "user",
-        "content": user_message
-    })
+    st.session_state.chat.append({"role": "user", "content": user_msg})
 
     prompt = build_prompt(memory, st.session_state.chat)
-
     contents = [prompt]
 
-    if file_text:
-        contents.append(f"\nUser uploaded file content:\n{file_text}")
+    if file:
+        contents.append(extract_file(file))
 
     if image:
         contents.append(
-            types.Part.from_bytes(
-                data=image.read(),
-                mime_type=image.type
-            )
+            types.Part.from_bytes(image.read(), image.type)
         )
 
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents
-        )
-        assistant_message = response.text.strip()
-    except Exception as e:
-        assistant_message = "⚠️ Error generating response."
-        st.error(str(e))
-
-    st.session_state.chat.append({
-        "role": "assistant",
-        "content": assistant_message
-    })
-
-    if "Error generating response" not in assistant_message:
-        memory.append({"role": "user", "content": user_message})
-        memory.append({"role": "assistant", "content": assistant_message})
-        save_memory(memory)
-
-# ================= UI DISPLAY =================
-
-for msg in st.session_state.chat:
-    st.markdown(
-        f"**{'You' if msg['role']=='user' else 'AI'}:** {msg['content']}"
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=contents
     )
 
-st.divider()
+    reply = response.text.strip()
 
-# ================= INPUT FORM =================
+    st.session_state.chat.append({"role": "assistant", "content": reply})
 
-with st.form("chat_form", clear_on_submit=True):
-    user_message = st.text_input("Type your message")
-    uploaded_image = st.file_uploader(
-        "Upload image (optional)",
-        type=["jpg", "png", "jpeg"]
-    )
-    uploaded_file = st.file_uploader(
-        "Upload file (txt, csv, pdf)",
-        type=["txt", "csv", "pdf"]
-    )
+    memory.append({"role": "user", "content": user_msg})
+    memory.append({"role": "assistant", "content": reply})
+    save_memory(memory)
 
-    send_clicked = st.form_submit_button("Send")
-
-# ================= BUTTONS =================
-
-col1, col2 = st.columns(2)
-
-with col1:
-    clear_chat_clicked = st.button("Clear Chat")
-
-with col2:
-    clear_memory_clicked = st.button("Clear Memory")
-
-# ================= ACTIONS =================
-
-if send_clicked and user_message.strip():
-    file_text = extract_file_content(uploaded_file) if uploaded_file else None
-
-    with st.spinner("Thinking..."):
-        chat_with_memory(
-            user_message,
-            image=uploaded_image,
-            file_text=file_text
-        )
     st.rerun()
 
-if clear_chat_clicked:
-    st.session_state.chat = []
-    st.success("Session closed")
-    st.rerun()
+# ================= EXPLAINABILITY =================
 
-if clear_memory_clicked:
-    clear_memory()
-    st.session_state.chat = []
-    st.success("Memory wiped")
-    st.rerun()
-
-# ================= MEMORY VIEWER =================
-
-with st.expander("📚 View Stored Memory"):
-    memory = load_memory()
-    st.json(memory)
-
-    st.download_button(
-        label="Download Memory",
-        data=json.dumps(memory, indent=2),
-        file_name="memory.json",
-        mime="application/json"
-    )
-
-st.divider()
-
-st.markdown(
-    """
-**Capabilities**
-- Enter key submits message
-- Image + file understanding
-- Session UI resets independently
-- Long-term memory stored on disk
-- Scales safely beyond context limits
-"""
-)
+with st.expander("🤔 Why did I answer this way?"):
+    st.markdown("I used the following memory:")
+    st.json(memory[-6:])
