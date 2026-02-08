@@ -1,10 +1,9 @@
 import streamlit as st
 import json
-import re
 from pathlib import Path
 from google import genai
 
-# ================= PAGE =================
+# ================== CONFIG ==================
 
 st.set_page_config(
     page_title="AI with Memory",
@@ -12,69 +11,89 @@ st.set_page_config(
     layout="centered"
 )
 
-st.title("🧠 AI with Memory")
-st.caption("Remembers you across sessions")
-
-# ================= GEMINI =================
-
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 MODEL = "models/gemini-flash-latest"
 
-# ================= STORAGE =================
-
 MEMORY_FILE = "memory.json"
 MAX_CONTEXT = 15
+
+# ================== MEMORY ==================
 
 def load_memory():
     if Path(MEMORY_FILE).exists():
         return json.load(open(MEMORY_FILE, "r", encoding="utf-8"))
     return []
 
-def save_memory(mem):
-    json.dump(mem, open(MEMORY_FILE, "w", encoding="utf-8"), indent=2)
+def save_memory(memory):
+    json.dump(memory, open(MEMORY_FILE, "w", encoding="utf-8"), indent=2)
 
-def clean_for_voice(text):
-    text = re.sub(r"[#*_>`]", "", text)
-    return text.strip()
+def clear_memory():
+    save_memory([])
 
-# ================= SESSION =================
+# ================== SESSION ==================
 
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
-# ================= CHAT DISPLAY =================
+# ================== HEADER ==================
 
-for i, msg in enumerate(st.session_state.chat):
-    if msg["role"] == "user":
-        st.markdown(f"**You:** {msg['content']}")
-    else:
-        col1, col2 = st.columns([10, 1])
-        with col1:
-            st.markdown(f"**AI:** {msg['content']}")
-        with col2:
-            if st.button("🔊", key=f"speak_{i}"):
-                speak_text = clean_for_voice(msg["content"])
-                st.components.v1.html(
-                    f"""
-                    <script>
-                    const msg = new SpeechSynthesisUtterance({json.dumps(speak_text)});
-                    msg.lang = "en-US";
-                    window.speechSynthesis.cancel();
-                    window.speechSynthesis.speak(msg);
-                    </script>
-                    """,
-                    height=0
-                )
+st.markdown(
+    """
+    <h2 style="text-align:center;">🧠 AI with Memory</h2>
+    <p style="text-align:center;color:gray;">
+    A calm assistant that remembers you across sessions
+    </p>
+    """,
+    unsafe_allow_html=True
+)
 
 st.divider()
 
-# ================= INPUT =================
+# ================== CHAT DISPLAY ==================
+
+def chat_bubble(role, text):
+    if role == "user":
+        st.markdown(
+            f"""
+            <div style="
+                background:#DCF8C6;
+                padding:12px;
+                border-radius:10px;
+                margin-bottom:8px;
+                max-width:80%;
+                margin-left:auto;
+            ">
+            {text}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f"""
+            <div style="
+                background:#F1F0F0;
+                padding:12px;
+                border-radius:10px;
+                margin-bottom:12px;
+                max-width:80%;
+            ">
+            {text}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+for msg in st.session_state.chat:
+    chat_bubble(msg["role"], msg["content"])
+
+# ================== INPUT ==================
 
 with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("Type your message")
+    user_input = st.text_input("Type your message here…")
     send = st.form_submit_button("Send")
 
-# ================= CHAT LOGIC =================
+# ================== CHAT LOGIC ==================
 
 if send and user_input.strip():
     memory = load_memory()
@@ -82,7 +101,10 @@ if send and user_input.strip():
     if not memory:
         memory.append({
             "role": "system",
-            "content": "You are a friendly personal assistant who remembers user details."
+            "content": (
+                "You are a friendly personal assistant. "
+                "You remember user details across sessions and respond concisely."
+            )
         })
 
     st.session_state.chat.append({
@@ -114,9 +136,42 @@ if send and user_input.strip():
 
     st.rerun()
 
-# ================= FOOTER =================
+# ================== FOOTER ACTIONS ==================
 
 st.divider()
-st.caption(
-    "🔹 This assistant focuses on memory, transparency, and calm UX — not gimmicks."
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🆕 New Chat"):
+        st.session_state.chat = []
+        st.rerun()
+
+with col2:
+    if st.button("🧠 Clear Memory"):
+        clear_memory()
+        st.session_state.chat = []
+        st.success("Memory cleared")
+
+# ================== MEMORY VIEW ==================
+
+with st.expander("🧠 What I remember about you"):
+    memory = load_memory()
+    if len(memory) <= 1:
+        st.info("I haven’t learned anything personal yet.")
+    else:
+        for m in memory:
+            if m["role"] != "system":
+                st.markdown(f"- {m['content']}")
+
+# ================== FOOTER ==================
+
+st.markdown(
+    """
+    <hr>
+    <p style="text-align:center;color:gray;font-size:13px;">
+    This assistant focuses on memory, clarity, and trust — not gimmicks.
+    </p>
+    """,
+    unsafe_allow_html=True
 )
