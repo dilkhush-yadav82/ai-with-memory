@@ -3,34 +3,41 @@ import json
 from pathlib import Path
 from google import genai
 
-# ================== CONFIG ==================
+# ================= PAGE CONFIG =================
 
 st.set_page_config(
-    page_title="AI with Memory",
+    page_title="AI Assistant with Memory",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
+
+st.title("🧠 AI Assistant with Memory")
+st.caption("Transparent memory • Hindi support • Task-oriented assistant")
+
+# ================= GEMINI CONFIG =================
 
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 MODEL = "models/gemini-flash-latest"
 
-MEMORY_FILE = "memory.json"
-MAX_CONTEXT = 15
+# ================= STORAGE =================
 
-# ================== MEMORY ==================
+MEMORY_FILE = "conversation_history.json"
+MAX_CONTEXT = 20
+
+# ================= MEMORY =================
 
 def load_memory():
     if Path(MEMORY_FILE).exists():
         return json.load(open(MEMORY_FILE, "r", encoding="utf-8"))
     return []
 
-def save_memory(memory):
-    json.dump(memory, open(MEMORY_FILE, "w", encoding="utf-8"), indent=2)
+def save_memory(mem):
+    json.dump(mem, open(MEMORY_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 
 def clear_memory():
     save_memory([])
 
-# ================== SESSION ==================
+# ================= SESSION STATE =================
 
 if "chat" not in st.session_state:
     st.session_state.chat = []
@@ -38,112 +45,114 @@ if "chat" not in st.session_state:
 if "language" not in st.session_state:
     st.session_state.language = "English"
 
-# ================== HEADER ==================
+if "voice" not in st.session_state:
+    st.session_state.voice = True
 
-st.markdown(
-    """
-    <h2 style="text-align:center;">🧠 AI with Memory</h2>
-    <p style="text-align:center;color:gray;">
-    A calm assistant that remembers you across sessions
-    </p>
-    """,
-    unsafe_allow_html=True
+# 🔑 Voice trigger (IMPORTANT)
+if "speak_now" not in st.session_state:
+    st.session_state.speak_now = False
+
+# ================= MEMORY ANALYSIS =================
+
+def extract_profile(memory):
+    facts = []
+    for m in memory:
+        text = m["content"].lower()
+        if any(k in text for k in ["name", "naam", "like", "pasand"]):
+            facts.append(m["content"])
+    return facts[:5]
+
+# ================= SIDEBAR =================
+
+st.sidebar.title("🧾 User Profile")
+
+memory = load_memory()
+facts = extract_profile(memory)
+
+if facts:
+    for f in facts:
+        st.sidebar.markdown(f"- {f}")
+else:
+    st.sidebar.info("No personal facts learned yet")
+
+st.sidebar.divider()
+
+st.sidebar.subheader("🌐 Language")
+st.session_state.language = st.sidebar.radio(
+    "Response language",
+    ["English", "Hindi"]
 )
 
-# ================== LANGUAGE SELECTOR ==================
-
-st.markdown(
-    "<p style='text-align:center;color:#666;'>Response language</p>",
-    unsafe_allow_html=True
+st.sidebar.subheader("🔊 Voice Output")
+st.session_state.voice = st.sidebar.checkbox(
+    "Speak responses",
+    value=st.session_state.voice
 )
 
-st.session_state.language = st.radio(
-    "",
-    ["English", "Hindi", "Hinglish"],
-    horizontal=True
+# 🔇 Stop speech immediately if voice turned OFF
+if not st.session_state.voice:
+    st.components.v1.html(
+        "<script>window.speechSynthesis.cancel();</script>",
+        height=0
+    )
+
+st.sidebar.divider()
+
+if st.sidebar.button("🧠 Clear Memory"):
+    clear_memory()
+    st.session_state.chat = []
+    st.sidebar.success("Memory cleared")
+    st.rerun()
+
+st.sidebar.download_button(
+    "📥 Download Memory",
+    data=json.dumps(memory, indent=2),
+    file_name="memory.json"
 )
+
+# ================= CHAT DISPLAY =================
+
+for msg in st.session_state.chat:
+    role = "You" if msg["role"] == "user" else "AI"
+    st.markdown(f"**{role}:** {msg['content']}")
 
 st.divider()
 
-# ================== CHAT DISPLAY ==================
-
-def chat_bubble(role, text):
-    if role == "user":
-        st.markdown(
-            f"""
-            <div style="
-                background:#DCF8C6;
-                padding:12px;
-                border-radius:10px;
-                margin-bottom:8px;
-                max-width:80%;
-                margin-left:auto;
-            ">
-            {text}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            f"""
-            <div style="
-                background:#F1F0F0;
-                padding:12px;
-                border-radius:10px;
-                margin-bottom:12px;
-                max-width:80%;
-            ">
-            {text}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-for msg in st.session_state.chat:
-    chat_bubble(msg["role"], msg["content"])
-
-# ================== INPUT ==================
+# ================= INPUT =================
 
 with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("Type your message here…")
-    send = st.form_submit_button("Send")
+    user_msg = st.text_input("Ask the assistant")
+    send = st.form_submit_button("Ask Assistant")
 
-# ================== CHAT LOGIC ==================
+# ================= CHAT LOGIC =================
 
-if send and user_input.strip():
+def build_prompt(mem, chat, language):
+    system = "Respond in Hindi." if language == "Hindi" else "Respond in English."
+
+    combined = mem + chat
+    recent = combined[-MAX_CONTEXT:]
+
+    body = "\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in recent
+    )
+
+    return f"{system}\n{body}"
+
+if send and user_msg.strip():
     memory = load_memory()
-
-    # Language instruction
-    if st.session_state.language == "Hindi":
-        lang_instruction = "Respond only in Hindi."
-    elif st.session_state.language == "Hinglish":
-        lang_instruction = "Respond in Hinglish (mix of Hindi and English)."
-    else:
-        lang_instruction = "Respond in English."
 
     if not memory:
         memory.append({
             "role": "system",
             "content": (
-                "You are a friendly personal assistant. "
-                "You remember user details across sessions. "
-                f"{lang_instruction} "
-                "Keep responses natural and concise."
+                "You are a personal assistant with persistent memory. "
+                "Remember user facts across sessions."
             )
         })
 
-    st.session_state.chat.append({
-        "role": "user",
-        "content": user_input
-    })
+    st.session_state.chat.append({"role": "user", "content": user_msg})
 
-    combined = memory + st.session_state.chat
-
-    prompt = "\n".join(
-        f"{m['role'].upper()}: {m['content']}"
-        for m in combined[-MAX_CONTEXT:]
-    )
+    prompt = build_prompt(memory, st.session_state.chat, st.session_state.language)
 
     response = client.models.generate_content(
         model=MODEL,
@@ -152,53 +161,69 @@ if send and user_input.strip():
 
     reply = response.text.strip()
 
-    st.session_state.chat.append({
-        "role": "assistant",
-        "content": reply
-    })
+    st.session_state.chat.append({"role": "assistant", "content": reply})
 
-    memory.append({"role": "user", "content": user_input})
+    # 🔊 trigger voice ONCE for this response
+    st.session_state.speak_now = True
+
+    memory.append({"role": "user", "content": user_msg})
     memory.append({"role": "assistant", "content": reply})
     save_memory(memory)
 
     st.rerun()
 
-# ================== FOOTER ACTIONS ==================
+# ================= EXPLAINABILITY =================
+
+with st.expander("🤔 Why did I answer this way?"):
+    st.markdown("Used recent memory:")
+    st.json(memory[-6:])
+
+# ================= VOICE OUTPUT (FIXED) =================
+
+def clean_for_voice(text: str) -> str:
+    """Remove markdown/symbols so speech sounds natural"""
+    for ch in ["#", "*", "_", "`", ">", "-", "\n"]:
+        text = text.replace(ch, " ")
+    return " ".join(text.split())
+
+if (
+    st.session_state.voice
+    and st.session_state.speak_now
+    and st.session_state.chat
+    and st.session_state.chat[-1]["role"] == "assistant"
+):
+    last = st.session_state.chat[-1]
+    speak_text = clean_for_voice(last["content"])
+
+    lang = "hi-IN" if st.session_state.language == "Hindi" else "en-US"
+
+    st.components.v1.html(
+        f"""
+        <script>
+        (function() {{
+            const utterance = new SpeechSynthesisUtterance({json.dumps(speak_text)});
+            utterance.lang = "{lang}";
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utterance);
+        }})();
+        </script>
+        """,
+        height=0
+    )
+
+    # 🔒 Prevent replay
+    st.session_state.speak_now = False
+
+# ================= FOOTER =================
 
 st.divider()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("🆕 New Chat"):
-        st.session_state.chat = []
-        st.rerun()
-
-with col2:
-    if st.button("🧠 Clear Memory"):
-        clear_memory()
-        st.session_state.chat = []
-        st.success("Memory cleared")
-
-# ================== MEMORY VIEW ==================
-
-with st.expander("🧠 What I remember about you"):
-    memory = load_memory()
-    if len(memory) <= 1:
-        st.info("I haven’t learned anything personal yet.")
-    else:
-        for m in memory:
-            if m["role"] != "system":
-                st.markdown(f"- {m['content']}")
-
-# ================== FOOTER ==================
-
 st.markdown(
     """
-    <hr>
-    <p style="text-align:center;color:gray;font-size:13px;">
-    Built for clarity, trust, and long-term memory — not gimmicks.
-    </p>
-    """,
-    unsafe_allow_html=True
+**Why this instead of ChatGPT**
+- Persistent, user-controlled memory
+- Transparent reasoning
+- Hindi-first accessibility
+- Voice as an interface, not a gimmick
+- Designed as an assistant, not a chatbot
+"""
 )
