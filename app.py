@@ -35,6 +35,9 @@ def clear_memory():
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
+if "language" not in st.session_state:
+    st.session_state.language = "English"
+
 # ================== HEADER ==================
 
 st.markdown(
@@ -45,6 +48,19 @@ st.markdown(
     </p>
     """,
     unsafe_allow_html=True
+)
+
+# ================== LANGUAGE SELECTOR ==================
+
+st.markdown(
+    "<p style='text-align:center;color:#666;'>Response language</p>",
+    unsafe_allow_html=True
+)
+
+st.session_state.language = st.radio(
+    "",
+    ["English", "Hindi", "Hinglish"],
+    horizontal=True
 )
 
 st.divider()
@@ -98,12 +114,22 @@ with st.form("chat_form", clear_on_submit=True):
 if send and user_input.strip():
     memory = load_memory()
 
+    # Language instruction
+    if st.session_state.language == "Hindi":
+        lang_instruction = "Respond only in Hindi."
+    elif st.session_state.language == "Hinglish":
+        lang_instruction = "Respond in Hinglish (mix of Hindi and English)."
+    else:
+        lang_instruction = "Respond in English."
+
     if not memory:
         memory.append({
             "role": "system",
             "content": (
                 "You are a friendly personal assistant. "
-                "You remember user details across sessions and respond concisely."
+                "You remember user details across sessions. "
+                f"{lang_instruction} "
+                "Keep responses natural and concise."
             )
         })
 
@@ -113,6 +139,7 @@ if send and user_input.strip():
     })
 
     combined = memory + st.session_state.chat
+
     prompt = "\n".join(
         f"{m['role'].upper()}: {m['content']}"
         for m in combined[-MAX_CONTEXT:]
@@ -170,7 +197,7 @@ st.markdown(
     """
     <hr>
     <p style="text-align:center;color:gray;font-size:13px;">
-    This assistant focuses on memory, clarity, and trust — not gimmicks.
+    Built for clarity, trust, and long-term memory — not gimmicks.
     </p>
     """,
     unsafe_allow_html=True
