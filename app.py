@@ -2,7 +2,6 @@ import streamlit as st
 import json
 from pathlib import Path
 from google import genai
-import os
 
 # ---------------- PAGE CONFIG ----------------
 
@@ -23,7 +22,7 @@ MODEL_NAME = "models/gemini-flash-latest"
 HISTORY_FILE = "conversation_history.json"
 MAX_HISTORY = 20
 
-# ---------------- LONG-TERM MEMORY ----------------
+# ---------------- MEMORY (LONG-TERM) ----------------
 
 def load_memory():
     if Path(HISTORY_FILE).exists():
@@ -41,7 +40,7 @@ def save_memory(memory):
 def clear_memory():
     save_memory([])
 
-# ---------------- SESSION STATE ----------------
+# ---------------- SESSION STATE (UI ONLY) ----------------
 
 if "chat" not in st.session_state:
     st.session_state.chat = []
@@ -55,20 +54,22 @@ def build_prompt(memory, session_chat):
         for m in combined[-MAX_HISTORY:]
     )
 
-# ---------------- CHAT FUNCTION ----------------
+# ---------------- CHAT LOGIC ----------------
 
 def chat_with_memory(user_message):
     memory = load_memory()
 
+    # System message (only once)
     if not memory:
         memory.append({
             "role": "system",
             "content": (
                 "You are a helpful AI assistant with memory. "
-                "You remember user details across sessions but do not repeat old chats."
+                "You remember user details across sessions but do not repeat old chats unless needed."
             )
         })
 
+    # Add to UI session
     st.session_state.chat.append({
         "role": "user",
         "content": user_message
@@ -82,68 +83,73 @@ def chat_with_memory(user_message):
             contents=prompt
         )
         assistant_message = response.text.strip()
-
     except Exception as e:
-        assistant_message = (
-            "⚠️ Sorry, I'm temporarily unable to respond. Please try again."
-        )
-        st.error(f"Gemini API error: {e}")
+        assistant_message = "⚠️ Sorry, I couldn't respond right now. Please try again."
+        st.error(f"Gemini error: {e}")
 
+    # Add assistant reply to UI
     st.session_state.chat.append({
         "role": "assistant",
         "content": assistant_message
     })
 
-    if "temporarily unable" not in assistant_message:
+    # Save to long-term memory only if successful
+    if "couldn't respond" not in assistant_message:
         memory.append({"role": "user", "content": user_message})
         memory.append({"role": "assistant", "content": assistant_message})
         save_memory(memory)
 
-# ---------------- UI ----------------
+# ---------------- DISPLAY CHAT ----------------
 
 for msg in st.session_state.chat:
-    st.markdown(
-        f"**{'You' if msg['role']=='user' else 'AI'}:** {msg['content']}"
-    )
+    if msg["role"] == "user":
+        st.markdown(f"**You:** {msg['content']}")
+    else:
+        st.markdown(f"**AI:** {msg['content']}")
 
 st.divider()
 
-user_input = st.text_input("Type your message")
+# ---------------- INPUT FORM (ENTER KEY WORKS) ----------------
 
-col1, col2, col3 = st.columns(3)
+with st.form("chat_form", clear_on_submit=True):
+    user_message = st.text_input("Type your message")
+    send_clicked = st.form_submit_button("Send")
+
+col1, col2 = st.columns(2)
 
 with col1:
-    send_clicked = st.button("Send")
-
-with col2:
     clear_chat_clicked = st.button("Clear Chat")
 
-with col3:
+with col2:
     clear_memory_clicked = st.button("Clear Memory")
 
-if send_clicked and user_input.strip():
+# ---------------- ACTIONS ----------------
+
+if send_clicked and user_message.strip():
     with st.spinner("Thinking..."):
-        chat_with_memory(user_input)
+        chat_with_memory(user_message)
     st.rerun()
 
 if clear_chat_clicked:
     st.session_state.chat = []
-    st.success("Session chat cleared")
+    st.success("Session closed (chat cleared)")
     st.rerun()
 
 if clear_memory_clicked:
     clear_memory()
     st.session_state.chat = []
-    st.success("Memory cleared")
+    st.success("Memory wiped (new user)")
     st.rerun()
 
 st.divider()
+
 st.markdown(
     """
 **How this works**
+- Enter key or Send button submits message
 - UI chat resets every session
 - Memory persists across sessions
-- Uses Gemini 1.5 Flash
-- Built with Streamlit
+- Clear Chat = new session
+- Clear Memory = forget user
 """
 )
