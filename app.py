@@ -12,16 +12,15 @@ st.set_page_config(
     layout="centered"
 )
 
-# Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 MODEL_NAME = "gemini-1.5-flash"
 HISTORY_FILE = "conversation_history.json"
 MAX_HISTORY = 20
 
-# ---------------- MEMORY FUNCTIONS ----------------
+# ---------------- MEMORY (LONG-TERM) ----------------
 
-def load_history():
+def load_memory():
     if Path(HISTORY_FILE).exists():
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -30,97 +29,112 @@ def load_history():
             return []
     return []
 
-def save_history(history):
+def save_memory(memory):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
+        json.dump(memory, f, indent=2, ensure_ascii=False)
 
-def clear_history():
-    save_history([])
+def clear_memory():
+    save_memory([])
+
+# ---------------- SESSION STATE ----------------
+
+if "chat" not in st.session_state:
+    st.session_state.chat = []   # UI messages only
 
 # ---------------- CHAT LOGIC ----------------
 
-def build_prompt(history):
+def build_prompt(memory, session_chat):
+    combined = memory + session_chat
     prompt = ""
-    for msg in history[-MAX_HISTORY:]:
+    for msg in combined[-MAX_HISTORY:]:
         prompt += f"{msg['role'].upper()}: {msg['content']}\n"
     return prompt
 
-def chat_with_memory(user_message, history):
-    # Add system message once
-    if not history:
-        history.append({
+def chat_with_memory(user_message):
+    memory = load_memory()
+
+    if not memory:
+        memory.append({
             "role": "system",
             "content": (
                 "You are a helpful AI assistant with memory. "
-                "You remember previous user details and can reference them later."
+                "You remember user details across sessions but do not repeat old chats unless needed."
             )
         })
 
-    # Add user message
-    history.append({
+    # Session chat (UI only)
+    st.session_state.chat.append({
         "role": "user",
         "content": user_message
     })
 
-    prompt = build_prompt(history)
+    prompt = build_prompt(memory, st.session_state.chat)
 
     model = genai.GenerativeModel(MODEL_NAME)
     response = model.generate_content(prompt)
-
     assistant_message = response.text.strip()
 
-    # Add assistant response
-    history.append({
+    # Save to session chat
+    st.session_state.chat.append({
         "role": "assistant",
         "content": assistant_message
     })
 
-    save_history(history)
-    return assistant_message
+    # Save to long-term memory
+    memory.append({"role": "user", "content": user_message})
+    memory.append({"role": "assistant", "content": assistant_message})
+    save_memory(memory)
 
-# ---------------- STREAMLIT UI ----------------
+# ---------------- UI ----------------
 
 st.title("🧠 AI with Memory")
-st.caption("A conversational AI that remembers you across sessions")
+st.caption("Remembers you across sessions, not chats")
 
-history = load_history()
-
-# Display previous conversation
-for msg in history:
+# Display SESSION chat only
+for msg in st.session_state.chat:
     if msg["role"] == "user":
         st.markdown(f"**You:** {msg['content']}")
-    elif msg["role"] == "assistant":
+    else:
         st.markdown(f"**AI:** {msg['content']}")
 
 st.divider()
 
 user_input = st.text_input("Type your message")
 
-col1, col2 = st.columns([1, 1])
+col1, col2, col3 = st.columns(3)
 
 with col1:
     send_clicked = st.button("Send")
 
 with col2:
-    clear_clicked = st.button("Clear Memory")
+    clear_chat_clicked = st.button("Clear Chat")
+
+with col3:
+    clear_memory_clicked = st.button("Clear Memory")
 
 if send_clicked and user_input.strip():
     with st.spinner("Thinking..."):
-        reply = chat_with_memory(user_input, history)
-    st.experimental_rerun()
+        chat_with_memory(user_input)
+    st.rerun()
 
-if clear_clicked:
-    clear_history()
-    st.success("Memory cleared!")
-    st.experimental_rerun()
+if clear_chat_clicked:
+    st.session_state.chat = []
+    st.success("Session chat cleared")
+    st.rerun()
+
+if clear_memory_clicked:
+    clear_memory()
+    st.session_state.chat = []
+    st.success("Memory cleared")
+    st.rerun()
 
 st.divider()
 st.markdown(
     """
-**How this works**
-- Conversation memory is stored locally in JSON
-- Previous messages are sent back to the model for context
+**How it works**
+- Chat UI resets every session
 - Memory persists across sessions
-- Built using Streamlit + Gemini API
+- Memory is used only for reasoning
+- Built with Streamlit + Gemini
 """
 )
